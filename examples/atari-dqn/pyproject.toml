@@ -1,0 +1,14 @@
+[project]
+name = "ttrl-example-atari-dqn"
+version = "0.1.0"
+description = "Double DQN on Atari Breakout, on one Tenstorrent chip"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "tt-rl[atari]",
+  # Viewer only (play.py). opencv, which the atari extra already pulls in,
+  # draws the overlay and writes the mp4; pygame opens the on-screen window.
+  "pygame>=2.6",
+]
+
+[tool.uv.sources]
+tt-rl = { path = "../..", editable = true }

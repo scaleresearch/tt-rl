@@ -1,0 +1,95 @@
+name: Hardware CI
+
+# `pytest -m tt` opens a real chip, so this needs the self-hosted box. The
+# hardware gate is the only thing that catches kernel- and device-level
+# regressions, so it runs on every pull request and can be required there.
+# Every merge passes through a PR, so that is full coverage of what lands.
+#
+# It deliberately does not run on `push`. The chips on this box are shared with
+# long training runs, so a feature-branch push would queue behind one until the
+# flock below times out. A gate that makes every push wait on a human's
+# training run is a gate people route around.
+#
+# Two things keep a PR run safe: the `concurrency` group below, which allows one
+# hardware job at a time across every branch, and the `flock` in the test step,
+# which serialises against anything else on the box that takes the same file.
+# Inside the lock the suite is scoped to a single chip, so one run never touches
+# more than one.
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      chip:
+        description: >
+          Physical Tenstorrent chip id to scope this run to
+          (/dev/tenstorrent/<chip>). Leave blank to let tests/conftest.py
+          auto-pick a free chip.
+        required: false
+        default: ""
+
+# One hardware job at a time, repo-wide. `cancel-in-progress: false` because a
+# cancelled run can leave a chip mid-teardown, and the next run would inherit
+# it.
+concurrency:
+  group: hardware-ci
+  cancel-in-progress: false
+
+jobs:
+  hardware-tests:
+    name: Hardware test suite (-m tt)
+    # No public Tenstorrent runner exists; this needs real chips attached.
+    runs-on: self-hosted
+    # A fork's pull request would run its own code on this machine, so only
+    # branches of this repository and manual dispatches reach the runner.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # A process that touches ttnn without TT_VISIBLE_DEVICES set does not
+      # open one chip, it takes the CHIP_IN_USE_<n>_PCIe driver mutex for
+      # every local chip on the board (see ttrl/engine/device/scope.py's
+      # module docstring and tests/conftest.py's `_scope_this_process`). If an
+      # explicit chip was requested via workflow_dispatch, compute its
+      # TT_VISIBLE_DEVICES/TT_MESH_GRAPH_DESC_PATH pair here, before any step
+      # imports ttnn, and export it for the pytest step below. Otherwise
+      # conftest.py's own `_scope_this_process` auto-picks a free chip at
+      # import time, which is also safe since it runs before any test
+      # module's `import ttnn` and happens inside the lock.
+      - name: Scope this run to a chip
+        if: ${{ inputs.chip != '' }}
+        env:
+          TTRL_CI_CHIP: ${{ inputs.chip }}
+        run: |
+          uv run python -c "
+          import os
+          from ttrl.engine.device.scope import chip_env
+          env = chip_env(int(os.environ['TTRL_CI_CHIP']), base={}, require_descriptor=True)
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              for k, v in env.items():
+                  f.write(f'{k}={v}\n')
+          "
+
+      # The lock file lives beside the per-chip advisory locks
+      # ttrl.engine.device.acquire() takes, and is a different file from any of
+      # them, so holding it here does not block the acquire the tests make. Its
+      # job is to stop a second whole-suite run, CI or not, from starting while
+      # this one is picking and holding a chip. `--timeout` fails the job
+      # rather than queueing behind a wedged run forever.
+      - name: Run hardware tests
+        run: |
+          mkdir -p /tmp/ttrl-locks
+          flock --timeout 5400 /tmp/ttrl-locks/hardware-ci.lock \
+            uv run pytest -m tt

@@ -1,0 +1,12 @@
+[project]
+name = "ttrl-example-mujoco-sac"
+version = "0.1.0"
+description = "SAC on MuJoCo Hopper-v5, on one Tenstorrent chip"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  # The mujoco extra brings opencv-python-headless, the cv2 behind --video.
+  "tt-rl[mujoco]",
+]
+
+[tool.uv.sources]
+tt-rl = { path = "../..", editable = true }

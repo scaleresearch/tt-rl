@@ -1,0 +1,138 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tt-rl"
+# Single source of truth: `ttrl.__version__`. setuptools reads this statically
+# (AST), so declaring it here does not import the package at build time.
+dynamic = ["version"]
+description = "Reinforcement learning on Tenstorrent, natively on TT-NN"
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Antoni Bertel" }]
+keywords = ["reinforcement-learning", "tenstorrent", "ttnn", "blackhole", "rl"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Version policy for the two pins below.
+#
+# ttnn is pinned to a single minor, `>=0.80.0,<0.81`. ttnn publishes one
+# release per minor (0.65 through 0.80 on PyPI, with 0.67.4, 0.70.1, 0.71.2
+# and 0.73.1 the only patches), so its minor is its release channel and it
+# carries breaking C++ and Python API changes inside it. ttrl builds on the
+# parts of ttnn that move most: the autograd-free op surface, device trace
+# capture, the mesh and cluster descriptors, and the conv kernel configs. A
+# ttnn minor bump is therefore a porting job for us, and it ships as a ttrl
+# minor bump: raise both bounds together, run the hardware gate, and record
+# the ttnn version the numbers came from.
+# A range spanning minors would let pip pick a ttnn that ttrl has never been
+# run against on a chip, which on this stack surfaces as a TT_FATAL inside a
+# kernel rather than an ImportError.
+#
+# `numpy<2` comes from upstream. ttnn 0.80.0's own metadata declares
+# `numpy<2,>=1.24.4`, so 1.26.4, the last of the 1.x line, is the ceiling the
+# whole tree is held to. Stating it here makes the resolution failure legible
+# at install time instead of mid-backtrack. It also caps
+# `opencv-python-headless` at 4.11.x, the last release that still accepts
+# numpy 1.x. This bound lifts when ttnn's does and not before.
+#
+# The env plumbing (gymnasium / ale-py / cv2 / mujoco) is resolved at call
+# time by `ttrl.envs`, so a bare install imports and runs without any
+# environment suite and each suite is an extra.
+dependencies = [
+  "ttnn>=0.80.0,<0.81",
+  "numpy>=1.26,<2",
+]
+
+[project.optional-dependencies]
+atari = [
+  "gymnasium[atari]>=1.4",
+  "ale-py>=0.12",
+  "opencv-python-headless>=4.11",
+]
+mujoco = [
+  "gymnasium[mujoco]>=1.4",
+  "mujoco>=3.17,<4",
+  # `ttrl.record_video` writes its mp4 through cv2, and watching a gait is
+  # a first-class use of this extra. Without it here, recording a
+  # locomotion policy needed the unrelated `atari` extra installed.
+  "opencv-python-headless>=4.11",
+]
+logging = ["tensorboard>=2.21"]
+# The tracker sink, `ttrl.train.logging.WandbLogger`. An extra rather than a
+# dependency: nothing on the training path imports wandb, and a run logs to
+# JSONL without it.
+tracker = ["wandb>=0.19"]
+# What `python -m tools.curves` draws with. An extra rather than a
+# dependency: the wheel trains, and nothing on the training path imports
+# matplotlib.
+plots = ["matplotlib>=3.9"]
+# What `ttrl.export_onnx` writes the policy graph with. An extra rather than a
+# dependency: `ttrl.export_policy` and `ttrl.load_policy` need numpy alone, and
+# `onnx` is a protobuf library that no training path imports. It brings no
+# torch and no runtime: running the graph is the consumer's business, and the
+# parity gate in the dev extra below is the only place this repository does it.
+onnx = ["onnx>=1.21"]
+# Everything needed to run the non-hardware test suite: pytest, the torch
+# reference implementations the parity tests compare against, TensorBoard,
+# which `tests/train/test_logging.py` exercises, matplotlib, which
+# `tests/tools/test_curves.py` exercises, and both environment suites, which
+# the env-layer tests build real environments from.
+#
+# wandb is deliberately absent. `tests/train/test_trackers.py` drives that
+# sink against a stand-in module and asserts the refusal when the real one is
+# missing, so the suite holds it to its contract on a machine with no tracker
+# client and without reaching a network.
+#
+# onnxruntime is here and not in the `onnx` extra: writing a graph needs the
+# protobuf library, and only the parity gate
+# (`tests/deploy/test_onnx_parity.py`) needs to run one. A policy whose ONNX
+# file merely loads is not a validated export, so the suite executes the graph
+# and compares actions against the numpy artifact.
+dev = [
+  "pytest>=9",
+  "torch>=2.14",
+  "tensorboard>=2.21",
+  "matplotlib>=3.9",
+  "tt-rl[onnx]",
+  "onnxruntime>=1.20",
+  "tt-rl[atari]",
+  "tt-rl[mujoco]",
+]
+
+[project.urls]
+Homepage = "https://github.com/scaleresearch/tt-rl"
+Repository = "https://github.com/scaleresearch/tt-rl"
+Issues = "https://github.com/scaleresearch/tt-rl/issues"
+
+[project.scripts]
+# The CLI is a thin argparse shell over the same public API an external
+# script calls, so anything it can do, `import ttrl` can do too.
+ttrl = "ttrl.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "ttrl.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["ttrl*"]
+
+[tool.pytest.ini_options]
+# Only `tests/` holds tests, so a bare `pytest` at the repo root never reaches
+# into `tools/`, which is developer tooling rather than a test suite.
+testpaths = ["tests"]
+# A bare `pytest` must not open a chip. The `tt` marker is what says a test
+# needs one, and `tt`-marked tests live all over `tests/`, not only in
+# `tests/hardware`, so deselecting the directory is not enough and a
+# command-line `-m` still overrides this to reach them.
+addopts = '-m "not tt"'
+markers = [
+  "tt: requires real Tenstorrent hardware (/dev/tenstorrent/*)",
+]

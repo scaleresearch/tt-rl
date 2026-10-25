@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# A superseded push on the same ref has nothing left to prove, so cancel it.
+# Keyed per ref so branches never cancel each other.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-tests:
+    name: Host test suite (-m "not tt")
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # `tt` tests require real Tenstorrent hardware (see tests/conftest.py
+      # and pyproject.toml's marker registration) and cannot run here.
+      - name: Run host tests
+        run: uv run pytest -m "not tt"
+
+  package:
+    name: Wheel and sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # The same gate a release runs, so CI and the releaser cannot disagree
+      # about what makes the distribution shippable: it builds the wheel and
+      # sdist, asserts the wheel carries no developer tooling, checks the
+      # METADATA renders a PyPI page, installs both into throwaway venvs, and
+      # verifies `import ttrl` is free of ttnn and works with no chip present.
+      # Host-only; it opens no device.
+      - name: Release checks
+        run: uv run python -m tools.release_check
