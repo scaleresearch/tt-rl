@@ -71,14 +71,17 @@ run (Atari clips play at 3x speed):
 
 ## Install
 
-ttrl installs from source for now. A PyPI release as `tt-rl` is on its way,
-after which `pip install tt-rl` will be enough.
+```bash
+pip install tt-rl              # or: uv pip install tt-rl
+pip install 'tt-rl[atari]'     # Atari
+pip install 'tt-rl[mujoco]'    # MuJoCo
+```
+
+From a checkout, for development:
 
 ```bash
 git clone https://github.com/scaleresearch/tt-rl && cd tt-rl
-pip install -e '.[atari]'     # Atari
-pip install -e '.[mujoco]'    # MuJoCo
-pip install -e '.[dev]'       # both, plus the test suite's dependencies
+pip install -e '.[dev]'        # both suites, plus the test suite's dependencies
 ```
 
 `ttnn` installs from PyPI as a dependency. Then check the machine:
